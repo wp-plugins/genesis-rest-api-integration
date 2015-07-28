@@ -10,7 +10,7 @@
  * Plugin Name:         Genesis REST API Integration
  * Plugin URI:          https://wordpress.org/plugins/genesis-rest-api-integration/
  * Description:         Adds content output from the Genesis framework hooks to the response data for posts, pages, and custom post types when using the WP REST API v2.
- * Version:             1.0.0
+ * Version:             1.1.0
  * Author:              Braad Martin
  * Author URI:          http://braadmartin.com
  * License:             GPL-2.0+
@@ -19,9 +19,9 @@
  * Domain Path:         /languages
  */
 
-define( 'GENESIS_REST_API_INTEGRATION_VERSION', '1.0.0' );
+define( 'GENESIS_REST_API_INTEGRATION_VERSION', '1.1.0' );
 
-add_action( 'init', 'genesis_rest_api_integration_init', 20 );
+add_action( 'rest_api_init', 'genesis_rest_api_integration_init', 0 );
 /**
  * Set up the the rest_prepare_{$post_type} filters that we'll use to add
  * content to the post object response.
@@ -30,24 +30,46 @@ add_action( 'init', 'genesis_rest_api_integration_init', 20 );
  */
 function genesis_rest_api_integration_init() {
 
+    global $wp_post_types;
+
 	// Get an array of all the registered custom post types.
 	$args = array(
 		'public'   => true,
-		'_builtin' => true,
+		'_builtin' => false,
 	);
-
 	$post_types = get_post_types( $args, 'names', 'and' );
 
-	// Allow the array of post types to be filtered.
+	// Manually add back in posts and pages.
+	$post_types[] = 'post';
+	$post_types[] = 'page';
+
+	// Allow the array of post type objects to be filtered.
 	$post_types = apply_filters( 'genesis_rest_api_supported_post_types', $post_types );
 
-	// Loop over each post type and register the rest api filter.
+	// Allow the choice of also registering API support for CPTs with this plugin.
+	$register_cpt_api_support = apply_filters( 'genesis_rest_api_register_cpt_api_support', false );
+
+	// Loop over each post type, register support for the API, and add the response filter.
 	foreach ( $post_types as $post_type ) {
 
-		// Ensure the post type name is correctly formatted.
-		$post_type = str_replace( '-', '_', str_replace( ' ', '_', $post_type ) );
+		$post_type_object = get_post_type_object( $post_type );
 
-		add_filter( 'rest_prepare_' . $post_type, 'genesis_rest_api_integration_add_post_data', 10, 3 );
+		// Only register support for the API on custom post types if specified.
+		if ( $register_cpt_api_support && 'post' !== $post_type_object->name && 'page' !== $post_type_object->name ) {
+
+			// Only set these properties if they are not already set.
+			if ( ! isset( $wp_post_types[ $post_type_object->name ]->show_in_rest ) ) {
+				$wp_post_types[ $post_type_object->name ]->show_in_rest = true;
+			}
+			if ( ! isset( $wp_post_types[ $post_type_object->name ]->rest_base ) ) {
+				$wp_post_types[ $post_type_object->name ]->rest_base = $post_type_object->name;
+			}
+			if ( ! isset( $wp_post_types[ $post_type_object->name ]->rest_controller_class ) ) {
+				$wp_post_types[ $post_type_object->name ]->rest_controller_class = 'WP_REST_Posts_Controller';
+			}
+		}
+
+		add_filter( 'rest_prepare_' . $post_type_object->name, 'genesis_rest_api_integration_add_post_data', 10, 3 );
 	}
 }
 
@@ -83,7 +105,7 @@ function genesis_rest_api_integration_add_post_data( $data, $post, $request ) {
 	if ( 'page' == $post_object->post_type ) {
 		$query = new WP_Query( 'page_id=' . $post_id );
 	} else {
-		$query = new WP_Query( 'p=' . $post_id );
+		$query = new WP_Query( 'p=' . $post_id . '&post_type=' . $post_object->post_type );
 	}
 
 	// Bail if the query didn't return a post.
